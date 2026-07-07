@@ -4,11 +4,9 @@ import requests
 from datetime import datetime
 from flask import Flask, jsonify, render_template, request
 
-# ─── Configuration ───────────────────────────────────────
 DEFAULT_THRESHOLD  = 30
 WEATHER_UPDATE_MIN = 10
 RAIN_BLOCK_PERCENT = 70
-# ── No API key needed! Open-Meteo is completely free ─────
 
 CROP_THRESHOLDS = {
     "tomato":     60, "potato":   55, "rice":       80,
@@ -27,70 +25,47 @@ _lock = threading.Lock()
 sensor_data = {
     "raw": 0, "moisture": 0, "pump": "OFF",
     "timestamp": "Waiting for data…", "connected": False,
-    "mode": "manual", "manual_pump": "OFF",   # power-on এ pump সবসময় OFF থাকবে
+    "mode": "manual", "manual_pump": "OFF",
     "threshold": DEFAULT_THRESHOLD, "crop": "custom",
 }
 
 weather_data = {
-    "temp":        "--",
-    "humidity":    "--",
+    "temp": "--", "humidity": "--",
     "description": "Enter your location →",
-    "rain_chance": 0,
-    "rain_blocked": False,
-    "icon":        "🌍",
-    "last_update": "—",
-    "city":        "",
-    "lat":         None,
-    "lon":         None,
-    "error":       "",
+    "rain_chance": 0, "rain_blocked": False,
+    "icon": "🌍", "last_update": "—",
+    "city": "", "lat": None, "lon": None, "error": "",
 }
 
-location_state = {
-    "city":    "",
-    "lat":     None,
-    "lon":     None,
-    "pending": False,
-}
+location_state = {"city": "", "lat": None, "lon": None}
 
-# ── Weather code → description + icon ───────────────────
 def parse_wmo(code):
     wmo = {
-        0:  ("Clear Sky",        "☀️"),
-        1:  ("Mainly Clear",     "🌤️"),
-        2:  ("Partly Cloudy",    "⛅"),
-        3:  ("Overcast",         "☁️"),
-        45: ("Foggy",            "🌫️"),
-        48: ("Icy Fog",          "🌫️"),
-        51: ("Light Drizzle",    "🌦️"),
-        53: ("Drizzle",          "🌧️"),
-        55: ("Heavy Drizzle",    "🌧️"),
-        61: ("Slight Rain",      "🌧️"),
-        63: ("Rain",             "🌧️"),
-        65: ("Heavy Rain",       "🌧️"),
-        71: ("Slight Snow",      "❄️"),
-        73: ("Snow",             "❄️"),
-        75: ("Heavy Snow",       "❄️"),
-        80: ("Rain Showers",     "🌦️"),
-        81: ("Rain Showers",     "🌧️"),
-        82: ("Heavy Showers",    "⛈️"),
-        95: ("Thunderstorm",     "⛈️"),
-        96: ("Thunderstorm+Hail","⛈️"),
+        0:  ("Clear Sky","☀️"), 1: ("Mainly Clear","🌤️"),
+        2:  ("Partly Cloudy","⛅"), 3: ("Overcast","☁️"),
+        45: ("Foggy","🌫️"), 48: ("Icy Fog","🌫️"),
+        51: ("Light Drizzle","🌦️"), 53: ("Drizzle","🌧️"),
+        55: ("Heavy Drizzle","🌧️"), 61: ("Slight Rain","🌧️"),
+        63: ("Rain","🌧️"), 65: ("Heavy Rain","🌧️"),
+        71: ("Slight Snow","❄️"), 73: ("Snow","❄️"),
+        75: ("Heavy Snow","❄️"), 80: ("Rain Showers","🌦️"),
+        81: ("Rain Showers","🌧️"), 82: ("Heavy Showers","⛈️"),
+        95: ("Thunderstorm","⛈️"), 96: ("Thunderstorm+Hail","⛈️"),
         99: ("Heavy Thunderstorm","⛈️"),
     }
-    return wmo.get(code, ("Unknown", "🌤️"))
+    return wmo.get(code, ("Unknown","🌤️"))
 
-# ── Fetch weather from Open-Meteo (no API key!) ──────────
 def do_fetch_weather(lat, lon, city_name):
+    """Weather fetch — directly called, no background thread dependency."""
     try:
         url = (
             f"https://api.open-meteo.com/v1/forecast"
             f"?latitude={lat}&longitude={lon}"
             f"&current=temperature_2m,relative_humidity_2m,weather_code"
             f"&hourly=precipitation_probability"
-            f"&forecast_days=1"
-            f"&timezone=auto"
+            f"&forecast_days=1&timezone=auto"
         )
-        r = requests.get(url, timeout=10)
+        r = requests.get(url, timeout=30)
         if r.status_code == 200:
             d        = r.json()
             current  = d.get("current", {})
@@ -98,60 +73,43 @@ def do_fetch_weather(lat, lon, city_name):
             humidity = current.get("relative_humidity_2m", 0)
             wcode    = current.get("weather_code", 0)
             desc, icon = parse_wmo(wcode)
-
-            # Max rain probability in next 6 hours
-            hourly = d.get("hourly", {})
-            probs  = hourly.get("precipitation_probability", [])
-            rain_chance = round(max(probs[:6])) if probs else 0
-
+            probs  = d.get("hourly", {}).get("precipitation_probability", [])
+            rain_chance  = round(max(probs[:6])) if probs else 0
             rain_blocked = rain_chance >= RAIN_BLOCK_PERCENT
             ts = datetime.now().strftime("%H:%M")
-
             with _lock:
                 weather_data.update({
-                    "temp":        temp,
-                    "humidity":    humidity,
-                    "description": desc,
-                    "rain_chance": rain_chance,
-                    "rain_blocked": rain_blocked,
-                    "icon":        icon,
-                    "last_update": ts,
-                    "city":        city_name,
-                    "lat":         lat,
-                    "lon":         lon,
-                    "error":       "",
+                    "temp": temp, "humidity": humidity,
+                    "description": desc, "rain_chance": rain_chance,
+                    "rain_blocked": rain_blocked, "icon": icon,
+                    "last_update": ts, "city": city_name,
+                    "lat": lat, "lon": lon, "error": "",
                 })
-            print(f"[weather] {city_name} {desc} {temp}°C Rain:{rain_chance}%")
+            print(f"[weather] ✅ {city_name} {desc} {temp}°C Rain:{rain_chance}%")
             return True
         else:
             with _lock:
-                weather_data["error"] = f"Weather API error {r.status_code}"
+                weather_data["error"]       = f"API error {r.status_code}"
+                weather_data["description"] = "Weather unavailable"
+            print(f"[weather] ❌ status {r.status_code}")
     except Exception as e:
         with _lock:
-            weather_data["error"] = str(e)
-        print(f"[weather] Error: {e}")
+            weather_data["error"]       = str(e)
+            weather_data["description"] = "Connection error"
+        print(f"[weather] ❌ {e}")
     return False
 
-
-def fetch_weather():
+def weather_refresh_loop():
+    """Periodically refresh weather every WEATHER_UPDATE_MIN minutes."""
     while True:
+        time.sleep(WEATHER_UPDATE_MIN * 60)
         with _lock:
-            lat     = location_state["lat"]
-            lon     = location_state["lon"]
-            city    = location_state["city"]
-            pending = location_state["pending"]
-            if pending:
-                location_state["pending"] = False
-
+            lat  = location_state["lat"]
+            lon  = location_state["lon"]
+            city = location_state["city"]
         if lat is not None and lon is not None:
+            print(f"[weather] 🔄 Refreshing for {city}")
             do_fetch_weather(lat, lon, city)
-
-        for _ in range(WEATHER_UPDATE_MIN * 60 // 5):
-            time.sleep(5)
-            with _lock:
-                if location_state["pending"]:
-                    break
-
 
 def check_connection():
     last_ts = ""
@@ -163,7 +121,6 @@ def check_connection():
             with _lock:
                 sensor_data["connected"] = False
         last_ts = cur
-
 
 # ── Routes ───────────────────────────────────────────────
 @app.route("/")
@@ -252,7 +209,6 @@ def set_crop():
         sensor_data["threshold"] = thr
     return jsonify({"status": "ok", "crop": crop, "threshold": thr})
 
-# ── City search using Open-Meteo Geocoding (no key needed!)
 @app.route("/geo_search")
 def geo_search():
     q = request.args.get("q", "").strip()
@@ -260,52 +216,40 @@ def geo_search():
         return jsonify([])
     try:
         url = f"https://geocoding-api.open-meteo.com/v1/search?name={q}&count=6&language=en&format=json"
-        r   = requests.get(url, timeout=6)
+        r   = requests.get(url, timeout=15)
         if r.status_code == 200:
             results = []
             for c in r.json().get("results", []):
-                name    = c.get("name", "")
-                state   = c.get("admin1", "")
+                name  = c.get("name", "")
+                state = c.get("admin1", "")
                 country = c.get("country", "")
-                lat     = c.get("latitude")
-                lon     = c.get("longitude")
-                label   = f"{name}, {state}, {country}" if state else f"{name}, {country}"
-                results.append({
-                    "label":   label,
-                    "city":    name,
-                    "country": country,
-                    "lat":     lat,
-                    "lon":     lon,
-                })
+                lat   = c.get("latitude")
+                lon   = c.get("longitude")
+                label = f"{name}, {state}, {country}" if state else f"{name}, {country}"
+                results.append({"label": label, "city": name, "country": country, "lat": lat, "lon": lon})
             return jsonify(results)
     except Exception as e:
         print(f"[geo_search] Error: {e}")
     return jsonify([])
 
-# ── Reverse geocode using Open-Meteo (no key needed!)
 @app.route("/geo_reverse")
 def geo_reverse():
     try:
         lat = float(request.args.get("lat", 0))
         lon = float(request.args.get("lon", 0))
-        # Open-Meteo reverse geocoding
         url = f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&zoom=10"
-        headers = {"User-Agent": "KrishiSahayak/1.0"}
-        r = requests.get(url, timeout=8, headers=headers)
+        r   = requests.get(url, timeout=15, headers={"User-Agent": "KrishiSahayak/1.0"})
         if r.status_code == 200:
-            addr    = r.json().get("address", {})
-            # জেলা/শহর level name নেওয়া হচ্ছে
+            addr = r.json().get("address", {})
             city = (addr.get("city") or addr.get("town") or
                     addr.get("district") or addr.get("county") or
                     addr.get("state_district") or "")
             if city:
-                # Open-Meteo দিয়ে lat/lon verify করি
                 return jsonify({"status": "ok", "city": city, "lat": lat, "lon": lon})
     except Exception as e:
         print(f"[geo_reverse] Error: {e}")
     return jsonify({"status": "error", "city": ""})
 
-# ── Set location by lat/lon directly (GPS থেকে)
 @app.route("/set_location", methods=["POST"])
 def set_location():
     body = request.get_json(force=True, silent=True)
@@ -316,27 +260,33 @@ def set_location():
     lat  = body.get("lat")
     lon  = body.get("lon")
 
-    # lat/lon directly দেওয়া হলে city search দরকার নেই
+    # lat/lon directly দেওয়া হলে — সরাসরি weather fetch করো
     if lat is not None and lon is not None:
+        lat, lon = float(lat), float(lon)
+        city = city or f"{lat:.2f},{lon:.2f}"
         with _lock:
-            location_state.update({"city": city or f"{lat:.2f},{lon:.2f}", "lat": float(lat), "lon": float(lon), "pending": True})
-            weather_data.update({"description": "Loading…", "icon": "🌀", "error": "", "city": city or "Your Location"})
+            location_state.update({"city": city, "lat": lat, "lon": lon})
+            weather_data.update({"description": "Loading…", "icon": "🌀", "error": "", "city": city})
+        # Background thread এ fetch করো (request block হবে না)
+        threading.Thread(target=do_fetch_weather, args=(lat, lon, city), daemon=True).start()
         return jsonify({"status": "ok", "city": city})
 
-    # city name দিয়ে search করে lat/lon বের করি
+    # city name দিয়ে lat/lon খুঁজে weather fetch করো
     if not city:
         return jsonify({"status": "error", "msg": "City or coordinates required"}), 400
     try:
         url = f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1&language=en&format=json"
-        r   = requests.get(url, timeout=6)
+        r   = requests.get(url, timeout=15)
         if r.status_code == 200 and r.json().get("results"):
             c    = r.json()["results"][0]
             lat  = c["latitude"]
             lon  = c["longitude"]
             name = c.get("name", city)
             with _lock:
-                location_state.update({"city": name, "lat": lat, "lon": lon, "pending": True})
+                location_state.update({"city": name, "lat": lat, "lon": lon})
                 weather_data.update({"description": "Loading…", "icon": "🌀", "error": "", "city": name})
+            # Background thread এ fetch করো
+            threading.Thread(target=do_fetch_weather, args=(lat, lon, name), daemon=True).start()
             return jsonify({"status": "ok", "city": name})
         else:
             with _lock:
@@ -350,6 +300,6 @@ def ping():
     return "pong", 200
 
 if __name__ == "__main__":
-    threading.Thread(target=fetch_weather,    daemon=True).start()
-    threading.Thread(target=check_connection, daemon=True).start()
+    threading.Thread(target=weather_refresh_loop, daemon=True).start()
+    threading.Thread(target=check_connection,     daemon=True).start()
     app.run(debug=False, host="0.0.0.0", port=5000)
