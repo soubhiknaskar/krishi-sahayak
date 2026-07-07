@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Krishi-Sahayak – Smart Irrigation</title>
+  <link rel="stylesheet" href="/static/style.css"/>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;600&family=Noto+Sans+Bengali:wght@700;900&display=swap" rel="stylesheet"/>
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="bg-glow"></div>
+
+  <div class="shell">
+
+    <!-- Header -->
+    <header>
+      <div class="logo">
+        <span class="logo-icon">🌱</span>
+        <div>
+          <div class="logo-title">
+            <span class="logo-krishi">Krishi</span><span class="logo-dash">-</span><span class="logo-sahayak">সহায়ক</span>
+          </div>
+          <div class="logo-sub">Growing With Nature with <b>AI</b> and <b>IoT</b></div>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="conn-indicator" id="connDot"></div>
+        <span class="conn-label" id="connLabel">Connecting…</span>
+      </div>
+    </header>
+
+    <!-- Timestamp -->
+    <div class="timestamp-bar">
+      <span class="ts-label">Last update:</span>
+      <span class="ts-value" id="timestamp">—</span>
+    </div>
+
+    <!-- Weather Card -->
+    <div class="weather-bar" id="weatherBar">
+      <div class="weather-left">
+        <span class="weather-icon" id="wIcon">🌍</span>
+        <div class="weather-info">
+          <div class="weather-city" id="wCity">—</div>
+          <div class="weather-desc" id="wDesc">Enter your location →</div>
+        </div>
+      </div>
+
+      <!-- Location Input -->
+      <!-- Location Input -->
+      <div class="location-input-wrap">
+        <div class="loc-search-wrap">
+          <input type="text" id="locationInput"
+                 placeholder="🔍 City… e.g. Kolkata, Delhi"
+                 oninput="onLocationInput()"
+                 onkeydown="onLocationKey(event)"
+                 autocomplete="off"/>
+          <div class="loc-dropdown" id="locDropdown"></div>
+        </div>
+        <button class="loc-btn loc-gps" onclick="useMyLocation()" title="Use my location">📍 My Location</button>
+        <button class="loc-btn" onclick="submitLocation()">Set ✓</button>
+      </div>
+
+      <div class="weather-stats">
+        <div class="weather-stat">
+          <span class="ws-label">🌡 Temp</span>
+          <span class="ws-val" id="wTemp">—</span>
+        </div>
+        <div class="weather-stat">
+          <span class="ws-label">💧 Humidity</span>
+          <span class="ws-val" id="wHumidity">—</span>
+        </div>
+        <div class="weather-stat">
+          <span class="ws-label">🌧 Rain</span>
+          <span class="ws-val" id="wRain">—</span>
+        </div>
+      </div>
+
+      <div class="weather-error" id="wError" style="display:none"></div>
+      <div class="rain-alert" id="rainAlert" style="display:none">
+        ⛈️ Rain expected — Pump blocked!
+      </div>
+    </div>
+
+    <!-- Crop Selector -->
+    <div class="crop-bar">
+      <div class="crop-bar-left">
+        <span class="crop-icon">🌱</span>
+        <span class="crop-title">Crop / ফসল</span>
+      </div>
+      <div class="crop-controls">
+        <div class="crop-search-wrap">
+          <input type="text" id="cropSearch" placeholder="Search crop… যেমন: tomato, ধান"
+                 oninput="filterCrops()" onfocus="showDropdown()" autocomplete="off"/>
+          <div class="crop-dropdown" id="cropDropdown"></div>
+        </div>
+        <div class="custom-threshold" id="customThreshold">
+          <input type="range" id="thrSlider" min="10" max="90" value="30"
+                 oninput="onSliderChange(this.value)"/>
+          <span class="thr-display" id="thrDisplay">30%</span>
+          <button class="thr-apply" onclick="applyCustomThreshold()">Set</button>
+        </div>
+      </div>
+      <div class="crop-info">
+        <span class="crop-info-label">Threshold:</span>
+        <span class="crop-info-val" id="cropThresholdVal">30%</span>
+        <span class="crop-info-hint" id="cropHint">Custom</span>
+      </div>
+    </div>
+
+    <!-- Mode Bar -->
+    <div class="mode-bar">
+      <span class="mode-label">Mode:</span>
+      <div class="mode-toggle">
+        <button class="mode-btn active" id="btnAuto"   onclick="setMode('auto')">⚙️ Auto</button>
+        <button class="mode-btn"        id="btnManual" onclick="setMode('manual')">🖐 Manual</button>
+      </div>
+      <div class="manual-controls" id="manualControls">
+        <button class="pump-ctrl on"  id="pumpOn"  onclick="setPump('ON')">💧 Pump ON</button>
+        <button class="pump-ctrl off" id="pumpOff" onclick="setPump('OFF')">⛔ Pump OFF</button>
+      </div>
+    </div>
+
+    <!-- Cards -->
+    <div class="cards">
+      <div class="card card--moisture">
+        <div class="card-label">Soil Moisture</div>
+        <div class="gauge-wrap">
+          <svg class="gauge-svg" viewBox="0 0 200 120">
+            <path class="gauge-track" d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke-width="14" stroke-linecap="round"/>
+            <path class="gauge-fill" id="gaugeArc" d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke-width="14" stroke-linecap="round" stroke-dasharray="251" stroke-dashoffset="251"/>
+            <line id="thrMarker" x1="100" y1="22" x2="100" y2="34" stroke="var(--amber)" stroke-width="3" stroke-linecap="round" transform="rotate(-90 100 100)"/>
+            <line class="gauge-needle" id="needle" x1="100" y1="100" x2="100" y2="28" stroke-width="3" stroke-linecap="round" transform="rotate(-90 100 100)"/>
+            <circle cx="100" cy="100" r="6" class="gauge-pivot"/>
+          </svg>
+          <div class="gauge-value" id="moistureVal">0<span class="gauge-unit">%</span></div>
+        </div>
+        <div class="soil-status" id="soilStatus">Waiting…</div>
+        <div class="gauge-ticks"><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span></div>
+      </div>
+
+      <div class="right-col">
+        <div class="card card--pump">
+          <div class="card-label">Pump Status</div>
+          <div class="pump-display">
+            <div class="pump-ring" id="pumpRing"><div class="pump-icon">💧</div></div>
+            <div>
+              <div class="pump-state" id="pumpState">—</div>
+              <div class="pump-reason" id="pumpReason"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card card--raw">
+          <div class="card-label">Raw Sensor Value</div>
+          <div class="raw-value" id="rawVal">—</div>
+          <div class="raw-bar-wrap"><div class="raw-bar" id="rawBar" style="width:0%"></div></div>
+          <div class="raw-range">0 <span style="float:right">1023</span></div>
+        </div>
+
+        <div class="card card--threshold">
+          <div class="card-label">Active Threshold</div>
+          <div class="threshold-row">
+            <div class="threshold-item">
+              <div class="thr-dot thr-dry"></div>
+              <div><div class="thr-title">Dry / শুষ্ক</div>
+              <div class="thr-val">Moisture &lt; <span id="thrDryVal">30</span>%</div></div>
+            </div>
+            <div class="threshold-item">
+              <div class="thr-dot thr-wet"></div>
+              <div><div class="thr-title">Wet / আর্দ্র</div>
+              <div class="thr-val">Moisture ≥ <span id="thrWetVal">30</span>%</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <footer>Krishi-Sahayak · কৃষি সহায়ক · NodeMCU ESP8266 · AI &amp; IoT · Growing With Nature</footer>
+  </div>
+
+  <script>
+    const CROP_THRESHOLDS = {{ crop_thresholds | tojson }};
+    const CROP_LABELS = {
+      tomato:       "🍅 Tomato / টমেটো",
+      potato:       "🥔 Potato / আলু",
+      rice:         "🌾 Rice / ধান",
+      corn:         "🌽 Corn / ভুট্টা",
+      onion:        "🧅 Onion / পেঁয়াজ",
+      cabbage:      "🥦 Cabbage / বাঁধাকপি",
+      mustard:      "🫚 Mustard / সরষে",
+      eggplant:     "🍆 Eggplant / বেগুন",
+      spinach:      "🥬 Spinach / পালং শাক",
+      strawberry:   "🍓 Strawberry / স্ট্রবেরি",
+      chili:        "🌶️ Chili / মরিচ",
+      watermelon:   "🍉 Watermelon / তরমুজ",
+      wheat:        "🌾 Wheat / গম",
+      garlic:       "🧄 Garlic / রসুন",
+      ginger:       "🫚 Ginger / আদা",
+      cucumber:     "🥒 Cucumber / শসা",
+      lentil:       "🫘 Lentil / মসুর ডাল",
+      sunflower:    "🌻 Sunflower / সূর্যমুখী",
+      carrot:       "🥕 Carrot / গাজর",
+      radish:       "🌱 Radish / মূলো",
+      pumpkin:      "🎃 Pumpkin / কুমড়ো",
+      bitter_gourd: "🥬 Bitter Gourd / করলা",
+      bottle_gourd: "🥒 Bottle Gourd / লাউ",
+      beans:        "🫘 Beans / শিম",
+    };
+  </script>
+  <script src="/static/script.js"></script>
+</body>
+</html>
