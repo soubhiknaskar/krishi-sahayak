@@ -5,7 +5,7 @@ from datetime import datetime
 from flask import Flask, jsonify, render_template, request
 
 DEFAULT_THRESHOLD  = 30
-WEATHER_UPDATE_MIN = 10
+WEATHER_UPDATE_MIN = 15
 RAIN_BLOCK_PERCENT = 70
 
 CROP_THRESHOLDS = {
@@ -20,8 +20,8 @@ CROP_THRESHOLDS = {
 }
 
 app = Flask(__name__)
-
 _lock = threading.Lock()
+
 sensor_data = {
     "raw": 0, "moisture": 0, "pump": "OFF",
     "timestamp": "Waiting for data…", "connected": False,
@@ -39,52 +39,58 @@ weather_data = {
 
 location_state = {"city": "", "lat": None, "lon": None}
 
-def parse_wmo(code):
-    wmo = {
-        0:  ("Clear Sky","☀️"), 1: ("Mainly Clear","🌤️"),
-        2:  ("Partly Cloudy","⛅"), 3: ("Overcast","☁️"),
-        45: ("Foggy","🌫️"), 48: ("Icy Fog","🌫️"),
-        51: ("Light Drizzle","🌦️"), 53: ("Drizzle","🌧️"),
-        55: ("Heavy Drizzle","🌧️"), 61: ("Slight Rain","🌧️"),
-        63: ("Rain","🌧️"), 65: ("Heavy Rain","🌧️"),
-        71: ("Slight Snow","❄️"), 73: ("Snow","❄️"),
-        75: ("Heavy Snow","❄️"), 80: ("Rain Showers","🌦️"),
-        81: ("Rain Showers","🌧️"), 82: ("Heavy Showers","⛈️"),
-        95: ("Thunderstorm","⛈️"), 96: ("Thunderstorm+Hail","⛈️"),
-        99: ("Heavy Thunderstorm","⛈️"),
-    }
-    return wmo.get(code, ("Unknown","🌤️"))
+# ── Weather code → icon ──────────────────────────────────
+def wcode_icon(desc):
+    d = desc.lower()
+    if "thunder" in d: return "⛈️"
+    if "rain" in d or "drizzle" in d: return "🌧️"
+    if "snow" in d: return "❄️"
+    if "fog" in d or "mist" in d: return "🌫️"
+    if "cloud" in d or "overcast" in d: return "☁️"
+    if "clear" in d or "sunny" in d: return "☀️"
+    if "partly" in d: return "⛅"
+    return "🌤️"
 
+# ── Fetch weather using wttr.in (no API key, no rate limit) ──
 def do_fetch_weather(lat, lon, city_name):
-    """Weather fetch — directly called, no background thread dependency."""
     try:
-        url = (
-            f"https://api.open-meteo.com/v1/forecast"
-            f"?latitude={lat}&longitude={lon}"
-            f"&current=temperature_2m,relative_humidity_2m,weather_code"
-            f"&hourly=precipitation_probability"
-            f"&forecast_days=1&timezone=auto"
-        )
-        time.sleep(1)
-        r = requests.get(url, timeout=30)
+        # wttr.in supports lat,lon directly
+        url = f"https://wttr.in/{lat},{lon}?format=j1"
+        r   = requests.get(url, timeout=20,
+                           headers={"User-Agent": "KrishiSahayak/2.0"})
         if r.status_code == 200:
-            d        = r.json()
-            current  = d.get("current", {})
-            temp     = round(current.get("temperature_2m", 0), 1)
-            humidity = current.get("relative_humidity_2m", 0)
-            wcode    = current.get("weather_code", 0)
-            desc, icon = parse_wmo(wcode)
-            probs  = d.get("hourly", {}).get("precipitation_probability", [])
-            rain_chance  = round(max(probs[:6])) if probs else 0
+            data     = r.json()
+            current  = data["current_condition"][0]
+            temp     = current.get("temp_C", "--")
+            humidity = current.get("humidity", "--")
+            desc     = current.get("weatherDesc", [{}])[0].get("value", "Unknown")
+            icon     = wcode_icon(desc)
+
+            # Rain chance from hourly (next 3 hours)
+            weather_list = data.get("weather", [])
+            rain_chance  = 0
+            if weather_list:
+                hourly = weather_list[0].get("hourly", [])
+                if hourly:
+                    chances = [int(h.get("chanceofrain", 0)) for h in hourly[:3]]
+                    rain_chance = max(chances) if chances else 0
+
             rain_blocked = rain_chance >= RAIN_BLOCK_PERCENT
             ts = datetime.now().strftime("%H:%M")
+
             with _lock:
                 weather_data.update({
-                    "temp": temp, "humidity": humidity,
-                    "description": desc, "rain_chance": rain_chance,
-                    "rain_blocked": rain_blocked, "icon": icon,
-                    "last_update": ts, "city": city_name,
-                    "lat": lat, "lon": lon, "error": "",
+                    "temp":        temp,
+                    "humidity":    humidity,
+                    "description": desc,
+                    "rain_chance": rain_chance,
+                    "rain_blocked": rain_blocked,
+                    "icon":        icon,
+                    "last_update": ts,
+                    "city":        city_name,
+                    "lat":         lat,
+                    "lon":         lon,
+                    "error":       "",
                 })
             print(f"[weather] ✅ {city_name} {desc} {temp}°C Rain:{rain_chance}%")
             return True
@@ -92,7 +98,7 @@ def do_fetch_weather(lat, lon, city_name):
             with _lock:
                 weather_data["error"]       = f"API error {r.status_code}"
                 weather_data["description"] = "Weather unavailable"
-            print(f"[weather] ❌ status {r.status_code}")
+            print(f"[weather] ❌ wttr.in status {r.status_code}")
     except Exception as e:
         with _lock:
             weather_data["error"]       = str(e)
@@ -101,15 +107,14 @@ def do_fetch_weather(lat, lon, city_name):
     return False
 
 def weather_refresh_loop():
-    """Periodically refresh weather every WEATHER_UPDATE_MIN minutes."""
     while True:
         time.sleep(WEATHER_UPDATE_MIN * 60)
         with _lock:
             lat  = location_state["lat"]
             lon  = location_state["lon"]
             city = location_state["city"]
-        if lat is not None and lon is not None:
-            print(f"[weather] 🔄 Refreshing for {city}")
+        if lat is not None:
+            print(f"[weather] 🔄 Refreshing {city}")
             do_fetch_weather(lat, lon, city)
 
 def check_connection():
@@ -151,10 +156,10 @@ def sensor():
     with _lock:
         thr          = sensor_data["threshold"]
         rain_blocked = weather_data["rain_blocked"]
-        sensor_data["raw"]       = raw
-        sensor_data["moisture"]  = moisture
-        sensor_data["timestamp"] = ts
-        sensor_data["connected"] = True
+        sensor_data.update({
+            "raw": raw, "moisture": moisture,
+            "timestamp": ts, "connected": True,
+        })
         if sensor_data["mode"] == "auto":
             sensor_data["pump"] = "OFF" if rain_blocked else ("ON" if moisture < thr else "OFF")
         else:
@@ -221,16 +226,17 @@ def geo_search():
         if r.status_code == 200:
             results = []
             for c in r.json().get("results", []):
-                name  = c.get("name", "")
-                state = c.get("admin1", "")
+                name    = c.get("name", "")
+                state   = c.get("admin1", "")
                 country = c.get("country", "")
-                lat   = c.get("latitude")
-                lon   = c.get("longitude")
-                label = f"{name}, {state}, {country}" if state else f"{name}, {country}"
-                results.append({"label": label, "city": name, "country": country, "lat": lat, "lon": lon})
+                lat     = c.get("latitude")
+                lon     = c.get("longitude")
+                label   = f"{name}, {state}, {country}" if state else f"{name}, {country}"
+                results.append({"label": label, "city": name,
+                                 "country": country, "lat": lat, "lon": lon})
             return jsonify(results)
     except Exception as e:
-        print(f"[geo_search] Error: {e}")
+        print(f"[geo_search] {e}")
     return jsonify([])
 
 @app.route("/geo_reverse")
@@ -238,8 +244,10 @@ def geo_reverse():
     try:
         lat = float(request.args.get("lat", 0))
         lon = float(request.args.get("lon", 0))
-        url = f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&zoom=10"
-        r   = requests.get(url, timeout=15, headers={"User-Agent": "KrishiSahayak/1.0"})
+        url = (f"https://nominatim.openstreetmap.org/reverse"
+               f"?lat={lat}&lon={lon}&format=json&zoom=10")
+        r   = requests.get(url, timeout=15,
+                           headers={"User-Agent": "KrishiSahayak/2.0"})
         if r.status_code == 200:
             addr = r.json().get("address", {})
             city = (addr.get("city") or addr.get("town") or
@@ -248,7 +256,7 @@ def geo_reverse():
             if city:
                 return jsonify({"status": "ok", "city": city, "lat": lat, "lon": lon})
     except Exception as e:
-        print(f"[geo_reverse] Error: {e}")
+        print(f"[geo_reverse] {e}")
     return jsonify({"status": "error", "city": ""})
 
 @app.route("/set_location", methods=["POST"])
@@ -261,22 +269,23 @@ def set_location():
     lat  = body.get("lat")
     lon  = body.get("lon")
 
-    # lat/lon directly দেওয়া হলে — সরাসরি weather fetch করো
     if lat is not None and lon is not None:
         lat, lon = float(lat), float(lon)
         city = city or f"{lat:.2f},{lon:.2f}"
         with _lock:
             location_state.update({"city": city, "lat": lat, "lon": lon})
-            weather_data.update({"description": "Loading…", "icon": "🌀", "error": "", "city": city})
-        # Background thread এ fetch করো (request block হবে না)
-        threading.Thread(target=do_fetch_weather, args=(lat, lon, city), daemon=True).start()
+            weather_data.update({"description": "Loading…", "icon": "🌀",
+                                  "error": "", "city": city})
+        threading.Thread(target=do_fetch_weather,
+                         args=(lat, lon, city), daemon=True).start()
         return jsonify({"status": "ok", "city": city})
 
-    # city name দিয়ে lat/lon খুঁজে weather fetch করো
     if not city:
-        return jsonify({"status": "error", "msg": "City or coordinates required"}), 400
+        return jsonify({"status": "error", "msg": "City required"}), 400
+
     try:
-        url = f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1&language=en&format=json"
+        url = (f"https://geocoding-api.open-meteo.com/v1/search"
+               f"?name={city}&count=1&language=en&format=json")
         r   = requests.get(url, timeout=15)
         if r.status_code == 200 and r.json().get("results"):
             c    = r.json()["results"][0]
@@ -285,13 +294,15 @@ def set_location():
             name = c.get("name", city)
             with _lock:
                 location_state.update({"city": name, "lat": lat, "lon": lon})
-                weather_data.update({"description": "Loading…", "icon": "🌀", "error": "", "city": name})
-            # Background thread এ fetch করো
-            threading.Thread(target=do_fetch_weather, args=(lat, lon, name), daemon=True).start()
+                weather_data.update({"description": "Loading…", "icon": "🌀",
+                                      "error": "", "city": name})
+            threading.Thread(target=do_fetch_weather,
+                             args=(lat, lon, name), daemon=True).start()
             return jsonify({"status": "ok", "city": name})
         else:
             with _lock:
-                weather_data.update({"error": f"City not found: {city}", "description": "City not found ❌", "icon": "❓"})
+                weather_data.update({"error": f"City not found: {city}",
+                                      "description": "City not found ❌", "icon": "❓"})
             return jsonify({"status": "error", "msg": f"City not found: {city}"}), 404
     except Exception as e:
         return jsonify({"status": "error", "msg": str(e)}), 500
