@@ -65,6 +65,7 @@ def do_fetch_weather(lat, lon, city_name):
             f"&hourly=precipitation_probability"
             f"&forecast_days=1&timezone=auto"
         )
+        time.sleep(1)
         r = requests.get(url, timeout=30)
         if r.status_code == 200:
             d        = r.json()
